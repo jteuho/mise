@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+
+# Test that tasks in included TOML files can extend task_templates defined in
+# the parent mise.toml. Previously, templates were only passed to tasks defined
+# inline in mise.toml — included file tasks always received an empty template map.
+
+export MISE_EXPERIMENTAL=1
+
+# Basic: included task file uses extends to inherit run/description from template
+mkdir -p tasks1
+cat <<'EOF' >tasks1/build.toml
+[build]
+extends = "python:build"
+EOF
+
+cat <<'EOF' >mise.toml
+[settings]
+experimental = true
+
+[task_templates."python:build"]
+run = "echo building python"
+description = "Build a Python project"
+
+[task_config]
+includes = ["tasks1/build.toml"]
+EOF
+
+assert "mise run build" "building python"
+assert_contains "mise tasks build" "Build a Python project"
+
+# Included task overrides the run command from the template
+cat <<'EOF' >tasks1/build.toml
+[build]
+extends = "python:build"
+run = "echo local build"
+EOF
+
+assert "mise run build" "local build"
+
+# Env deep merge: included task adds env vars, template provides defaults
+mkdir -p tasks2
+cat <<'EOF' >tasks2/env-task.toml
+[env-task]
+extends = "base:env"
+env = { FOO = "local_foo" }
+EOF
+
+cat <<'EOF' >mise.toml
+[settings]
+experimental = true
+
+[task_templates."base:env"]
+run = "echo FOO=$FOO BAR=$BAR"
+env = { FOO = "template_foo", BAR = "template_bar" }
+
+[task_config]
+includes = ["tasks2/env-task.toml"]
+EOF
+
+assert "mise run env-task" "FOO=local_foo BAR=template_bar"
+
+# Glob include: tasks discovered via glob pattern can also extend templates
+mkdir -p tasks3
+cat <<'EOF' >tasks3/greet.toml
+[greet]
+extends = "common:greet"
+EOF
+
+cat <<'EOF' >mise.toml
+[settings]
+experimental = true
+
+[task_templates."common:greet"]
+run = "echo hello from template"
+
+[task_config]
+includes = ["tasks3/*.toml"]
+EOF
+
+assert "mise run greet" "hello from template"
+
+# Directory glob include: TOML tasks in a directory discovered via glob can extend templates
+# Note: directory includes (without glob) only load executable scripts, not TOML files.
+mkdir -p mytasks
+cat <<'EOF' >mytasks/mytest.toml
+[mytest]
+extends = "base:mytest"
+EOF
+
+cat <<'EOF' >mise.toml
+[settings]
+experimental = true
+
+[task_templates."base:mytest"]
+run = "echo tests passed"
+description = "Run tests"
+
+[task_config]
+includes = ["mytasks/*.toml"]
+EOF
+
+assert "mise run mytest" "tests passed"
+assert_contains "mise tasks mytest" "Run tests"
+
+# Error: template not found in included file gives a clear message
+mkdir -p tasks4
+cat <<'EOF' >tasks4/broken.toml
+[broken]
+extends = "does:not:exist"
+EOF
+
+cat <<'EOF' >mise.toml
+[settings]
+experimental = true
+
+[task_config]
+includes = ["tasks4/broken.toml"]
+EOF
+
+assert_fail "mise run broken" "not found"
+
+echo '' >mise.toml
